@@ -18,7 +18,7 @@ from .agents import DEFAULT_ISSUE_STEPS, DEFAULT_LEASE_STEPS, IssueAgent, LeaseA
 from .config import DEFAULT_DATA_DIR, SEED_DIR, Settings
 from .domain import new_id
 from .ingest import OcrEngine, make_ocr
-from .pipeline import available_steps
+from .pipeline import StepError, available_steps
 from .rules import load_ruleset
 from .store import Store
 from .units import UnitRegistry
@@ -243,7 +243,10 @@ def create_app(data_dir: Path | None = None, vision: VisionModel | None = None,
             if len(blob) > MAX_PHOTO:
                 raise HTTPException(413, f"{up.filename} is larger than 10 MB")
             loaded.append((name, blob))
-        issue = issue_agent.run(unit, loaded, reporter.strip(), note.strip(), unit.lease_id)
+        try:
+            issue = issue_agent.run(unit, loaded, reporter.strip(), note.strip(), unit.lease_id)
+        except StepError as exc:  # e.g. the vision provider rejected the key or timed out
+            raise HTTPException(502, str(exc)) from exc
         folder = store.dir / "issues" / issue.id
         folder.mkdir(parents=True)
         for name, blob in loaded:

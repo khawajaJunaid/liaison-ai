@@ -25,7 +25,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
 uvicorn app.main:app --reload           # http://127.0.0.1:8000
-pytest                                  # 112 tests, offline, about 2 seconds
+pytest                                  # 121 tests, offline, about 2 seconds
 ```
 
 Try it with the samples:
@@ -42,13 +42,30 @@ Try it with the samples:
 | Setting | What it enables | Needs |
 |---|---|---|
 | default | Everything, with a deterministic stub for photo assessment | nothing |
-| `LEASE_AGENT_VISION=anthropic` | Real photo assessment with a vision model | `pip install anthropic`, `ANTHROPIC_API_KEY`; optional `VISION_MODEL` (default `claude-sonnet-5-5`) |
+| `LEASE_AGENT_VISION=anthropic` | Real photo assessment with Anthropic | `pip install anthropic`, `ANTHROPIC_API_KEY`; optional `VISION_MODEL` (default `claude-sonnet-5-5`) |
+| `LEASE_AGENT_VISION=openai` | Real photo assessment with OpenAI | `pip install openai`, `OPENAI_API_KEY`; optional `VISION_MODEL` (default `gpt-4o`, change it to whichever vision model your key can use) |
+| `LEASE_AGENT_VISION=openai` plus `OPENAI_BASE_URL` | A local or other OpenAI-compatible server (Ollama, vLLM, LM Studio) | no real key; set `VISION_MODEL` to a vision-capable model that server hosts |
 | `LEASE_AGENT_OCR=paddle` | OCR for scanned leases with PaddleOCR-VL | `pip install "paddleocr[doc-parser]"` (multi-GB model download, runs locally, no key) |
 | `LEASE_AGENT_LEASE_STEPS`, `LEASE_AGENT_ISSUE_STEPS` | Change which steps each agent runs, and in what order (comma-separated names) | nothing; see [Editing the pipeline](#editing-the-pipeline) |
 
-Both optional engines are written but **not exercised in this repo's tests**: the photo parser is unit
-tested with fake model replies, and OCR routing is tested with a fake engine. Neither has been run
-against the live service, so check them first when you plug in your keys.
+Install the provider SDKs with `pip install -r requirements-vision.txt`. A wrong provider name, a missing
+key or a missing SDK stops the app at startup with a clear message. A provider failure at run time (bad
+key, rate limit, timeout) returns a 502 that names the step, and nothing is half-saved.
+
+**Try a provider on real photos before relying on it:**
+
+```bash
+export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY, set in your own shell
+python -m scripts.try_vision openai  my_photo.jpg
+python -m scripts.try_vision anthropic my_photo.jpg
+```
+
+It prints the model's assessment as JSON, never the key. Use real photos: the placeholders in
+`samples/photos` have their own file names written on them.
+
+The provider adapters and the PaddleOCR engine are written but **have not been run against a live
+service in this repo**. Request shape and reply parsing are tested with fake clients (and a fake OCR
+engine for routing), but a real call can still differ, so run the script above first.
 
 ## How it works
 
@@ -239,18 +256,18 @@ app/
   lease_steps.py  read_pdf, extract_fields, match_unit, validate_rules, self_check
   issue_steps.py  assess_photos, summarise, draft_work_order
   agents.py    LeaseAgent, IssueAgent (a step list each) and human-decision handling
-  vision.py    VisionModel interface, StubVision, AnthropicVision
+  vision.py    VisionModel interface, StubVision, AnthropicVision, OpenAIVision
   ocr_paddle.py optional PaddleOCR-VL engine
   store.py     SQLite persistence and audit log
   main.py      FastAPI app
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
 scripts/       sample generator
-tests/         112 tests
+tests/         121 tests
 ```
 
 ## Honest status
 
 Tested: the rule engine, extraction and provenance, OCR routing (with a fake engine), unit matching, the
-whole review flow over HTTP, and input validation. Not tested live: PaddleOCR-VL and the Anthropic vision
-call. The UI is exercised only by hand. Photo assessment from the stub is keyword-driven by design.
+whole review flow over HTTP, input validation, and both vision adapters against fake clients. Not tested
+live: PaddleOCR-VL and the Anthropic and OpenAI calls. The UI is exercised only by hand. Photo assessment from the stub is keyword-driven by design.
