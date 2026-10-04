@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lease and issue agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --mute:#667085; --line:#e3e6ec; --ok:#157f4b; --bad:#b42318; --warn:#b54708; --blue:#1d4ed8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:12px 20px; background:#111827; color:#fff; display:flex; gap:16px; align-items:center; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header small { color:#9ca3af; }
+  main { display:grid; grid-template-columns:300px 1fr; gap:16px; padding:16px; align-items:start; }
+  @media (max-width: 800px) { main { grid-template-columns:1fr; } }
+  section, aside { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:14px; }
+  h2 { font-size:15px; margin:0 0 10px; } h3 { font-size:13px; margin:14px 0 6px; color:var(--mute); text-transform:uppercase; letter-spacing:.04em; }
+  .unit { padding:9px 10px; border:1px solid var(--line); border-radius:6px; margin-bottom:8px; cursor:pointer; }
+  .unit:hover, .unit.sel { border-color:var(--blue); background:#f5f8ff; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .available, .PASS, .accepted, .low { color:var(--ok); border-color:#a6e1c1; background:#ecfdf3; }
+  .occupied, .FAIL, .rejected, .high { color:var(--bad); border-color:#f4b5ae; background:#fef3f2; }
+  .NOT_DETERMINABLE, .medium, .draft, .pending, .overridden { color:var(--warn); border-color:#f7c995; background:#fffaeb; }
+  table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mute); font-weight:500; font-size:12px; }
+  button { font:inherit; padding:3px 9px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
+  button:hover { border-color:var(--blue); } button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  .muted { color:var(--mute); } .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .err { color:var(--bad); margin:8px 0; } .note { font-size:12px; color:var(--mute); }
+  img.thumb { width:96px; height:64px; object-fit:cover; border-radius:4px; border:1px solid var(--line); }
+  img.page { max-width:100%; border:1px solid var(--line); }
+  .issue { border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px; }
+  pre { white-space:pre-wrap; font:inherit; background:#f9fafb; padding:8px; border-radius:6px; margin:6px 0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; } @media (max-width:1100px) { .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header><h1>Marina Crest Holdings</h1><small>Lease and issue agent</small></header>
+<main>
+  <aside>
+    <h2>Units</h2>
+    <div id="units"></div>
+    <h3>Add a lease</h3>
+    <input type="file" id="leaseFile" accept="application/pdf">
+    <div id="uploadErr" class="err"></div>
+  </aside>
+  <div>
+    <section id="review" hidden></section>
+    <section id="unit"><p class="muted">Pick a unit, or upload a lease PDF.</p></section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const show = (v) => v === null || v === undefined ? "—" : v === true ? "yes" : v === false ? "no" : typeof v === "number" ? v.toLocaleString() : v;
+let selectedUnit = null, reviewId = null;
+const woTitles = {};
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const body = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  if (!res.ok) throw new Error(body?.detail ? (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)) : res.statusText);
+  return body;
+}
+const send = (method, path, data) => api(path, { method, headers: {"content-type": "application/json"}, body: JSON.stringify(data ?? {}) });
+const badge = (text, cls = text) => `<span class="badge ${esc(cls)}">${esc(text)}</span>`;
+
+async function loadUnits() {
+  const units = await api("/api/units");
+  $("units").innerHTML = units.map((u) => `
+    <div class="unit ${u.unit_id === selectedUnit ? "sel" : ""}" onclick="openUnit('${esc(u.unit_id)}')">
+      <div class="row"><b>${esc(u.label)}</b> ${badge(u.status)}</div>
+      <div class="note">${esc(u.building_name)} · ${esc(u.type)} · ${u.area_sqm} m²</div>
+      <div class="note">${u.tenant ? "Tenant: " + esc(u.tenant) : "No tenant"}${u.open_issues ? " · " + u.open_issues + " issue(s)" : ""}</div>
+    </div>`).join("");
+}
+
+async function openUnit(id) {
+  selectedUnit = id;
+  const v = await api("/api/units/" + encodeURIComponent(id));
+  const u = v.unit;
+  $("unit").innerHTML = `
+    <h2>${esc(u.label)} ${badge(u.status)}</h2>
+    <div class="note">${esc(u.unit_id)} · ${esc(u.building_name)}, ${esc(u.property_name)} · parking ${esc(u.parking_bay)}</div>
+    <h3>Lease</h3>
+    ${v.lease ? leaseCard(v.lease) : '<p class="muted">No accepted lease on this unit.</p>'}
+    ${v.pending_leases.map((p) => `<div class="row">${badge("pending")} ${esc(p.filename)} · ${esc(p.tenant ?? "tenant unknown")}
+        · ${p.pending_flags} open flag(s) <button onclick="openReview('${p.id}')">Review</button></div>`).join("")}
+    <h3>Issues on this unit</h3>
+    ${v.issues.length ? v.issues.map(issueCard).join("") : '<p class="muted">No issues reported.</p>'}
+    <h3>Report an issue</h3>
+    <form id="issueForm" class="row">
+      <input name="reporter" placeholder="Your name">
+      <input name="note" placeholder="What is wrong? (optional)" size="32">
+      <input type="file" name="photos" accept="image/*" multiple required>
+      <button class="primary">Assess photos</button>
+    </form>
+    <div id="issueErr" class="err"></div>
+    <h3>Audit trail</h3>
+    <table><tr><th>When</th><th>What</th><th>Detail</th></tr>${v.audit.slice(0, 15).map((a) =>
+      `<tr><td class="note">${esc(a.ts.replace("T", " ").slice(0, 19))}</td><td>${esc(a.action)}</td><td class="note">${esc(JSON.stringify(a.detail).slice(0, 140))}</td></tr>`).join("")}</table>`;
+  $("issueForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target); fd.append("unit_id", id);
+    try { await api("/api/issues", { method: "POST", body: fd }); await refresh(); } catch (err) { $("issueErr").textContent = err.message; }
+  };
+  loadUnits();
+}
+
+function leaseCard(l) {
+  const f = l.fields;
+  return `<table><tr><td>Tenant</td><td>${esc(f.tenant_name.value)}</td><td>Rent</td><td>QAR ${esc(show(f.monthly_rent.value))} / month</td></tr>
+    <tr><td>Term</td><td>${esc(f.commencement_date.value)} to ${esc(f.expiry_date.value)}</td><td>Deposit</td><td>QAR ${esc(show(f.deposit_amount.value))}</td></tr></table>
+    <button onclick="openReview('${l.id}')">Open full record</button>`;
+}
+
+function issueCard(i) {
+  const wo = i.work_order;
+  if (wo) woTitles[i.id] = wo.title;
+  return `<div class="issue">
+    <div class="row"><b>${esc(i.summary)}</b><span class="note">by ${esc(i.reporter || "unknown")} · ${esc(i.created_at.slice(0, 10))}</span></div>
+    ${i.note ? `<div class="note">“${esc(i.note)}”</div>` : ""}
+    ${i.photos.map((p) => `<div class="row" style="margin-top:6px">
+        <img class="thumb" src="/api/issues/${i.id}/photos/${encodeURIComponent(p.filename)}" alt="">
+        <div>${badge(p.condition, p.condition === "damaged" ? "high" : p.condition === "worn" ? "medium" : "low")}
+          ${p.damages.map((d) => badge(d.type + " (" + d.severity + ")", d.severity)).join(" ")}
+          <div class="note">Equipment: ${esc(p.equipment.map((e) => e.name).join(", ") || "none identified")} ·
+            confidence ${Math.round(p.confidence * 100)}% · ${esc(p.model)}${p.needs_review ? " · needs review" : ""}</div></div></div>`).join("")}
+    ${wo ? `<h3>Draft work order ${badge(wo.status)} ${badge(wo.priority)}</h3>
+      <div><b>${esc(wo.title)}</b></div><pre>${esc(wo.description)}</pre>
+      ${wo.status === "draft" ? `<div class="row"><button class="primary" onclick="decideWO('${i.id}','accept')">Accept</button>
+        <button onclick="editWO('${i.id}')">Edit title and accept</button>
+        <button class="danger" onclick="decideWO('${i.id}','reject')">Reject</button></div>` : ""}` : ""}
+  </div>`;
+}
+
+async function decideWO(id, action, title) {
+  await send("PATCH", `/api/issues/${id}/work-order`, { action, title });
+  await refresh();
+}
+function editWO(id) {
+  const title = prompt("Work order title", woTitles[id] || "");
+  if (title) decideWO(id, "accept", title);
+}
+
+async function openReview(id) {
+  reviewId = id;
+  const l = await api("/api/leases/" + id);
+  const open = l.status === "pending_review";
+  const rows = Object.values(l.fields).filter((f) => f.name !== "rent_frequency").map((f) => `
+    <tr><td><b>${esc(f.name.replaceAll("_", " "))}</b></td>
+      <td>${esc(String(show(f.value)).slice(0, 90))}${f.note ? `<div class="note">${esc(f.note)}</div>` : ""}</td>
+      <td>${f.source ? `<button onclick="showSource('${l.id}','${f.name}')">p.${f.source.page}</button>` : "—"}</td>
+      <td>${Math.round(f.confidence * 100)}%</td><td>${badge(f.decision)}</td>
+      <td>${open ? `<button onclick="decideField('${f.name}','accept')">Accept</button>
+          <button onclick="overrideField('${f.name}')">Override</button>
+          <button class="danger" onclick="decideField('${f.name}','reject')">Reject</button>` : ""}</td></tr>`).join("");
+  $("review").hidden = false;
+  $("review").innerHTML = `
+    <div class="row"><h2 style="margin:0">Lease record: ${esc(l.filename)}</h2> ${badge(l.status, l.status === "accepted" ? "accepted" : l.status === "rejected" ? "rejected" : "pending")}
+      <span class="note">Unit: ${esc(l.unit_id ?? "no match")} (${esc(l.unit_match)})</span>
+      <button onclick="$('review').hidden=true">Close</button></div>
+    ${l.warnings.map((w) => `<div class="err">${esc(w)}</div>`).join("")}
+    <div class="grid2"><div>
+      <h3>Extracted fields</h3>
+      <table><tr><th>Field</th><th>Value</th><th>Source</th><th>Conf.</th><th>Decision</th><th></th></tr>${rows}</table>
+      <h3>Flags for a human</h3>
+      ${l.flags.length ? `<table>${l.flags.map((f) => `<tr><td>${badge(f.severity)}</td><td>${esc(f.message)}</td><td>${badge(f.decision)}</td>
+        <td>${open ? `<button onclick="decideFlag('${esc(f.id)}','accept')">Confirm</button> <button onclick="decideFlag('${esc(f.id)}','reject')">Dismiss</button>` : ""}</td></tr>`).join("")}</table>` : '<p class="muted">None.</p>'}
+    </div><div>
+      <h3>Owner rules</h3>
+      <table>${l.rule_results.map((r) => `<tr><td>${esc(r.rule_id)}</td><td>${badge(r.outcome)}</td><td>${esc(r.reason)}${r.source ? `<div class="note">“${esc(r.source.quote)}” p.${r.source.page}</div>` : ""}</td></tr>`).join("")}</table>
+      <h3>Source</h3><div id="source" class="note">Click a page number to see where a value was read.</div>
+      <h3>What the agent did</h3><ul class="note">${l.trace.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    </div></div>
+    ${open ? `<div class="row" style="margin-top:12px"><button class="primary" onclick="decideLease('accept')">Accept lease and link to unit</button>
+      <button class="danger" onclick="decideLease('reject')">Reject lease</button></div>` : ""}
+    <div id="reviewErr" class="err"></div>`;
+}
+
+async function showSource(id, field) {
+  const l = await api("/api/leases/" + id);
+  const s = l.fields[field].source;
+  if (!s) return;
+  $("source").innerHTML = `<div>“${esc(s.quote)}”</div>
+    <img class="page" src="/api/leases/${id}/page/${s.page}.png?field=${encodeURIComponent(field)}" alt="lease page ${s.page}">`;
+}
+
+const guarded = async (fn) => { try { await fn(); } catch (e) { $("reviewErr").textContent = e.message; } };
+const decideField = (name, action, value) => guarded(async () => { await send("PATCH", `/api/leases/${reviewId}/fields/${name}`, { action, value }); await refresh(); });
+const overrideField = (name) => { const v = prompt(`New value for ${name.replaceAll("_", " ")}`); if (v) decideField(name, "override", v); };
+const decideFlag = (id, action) => guarded(async () => { await send("PATCH", `/api/leases/${reviewId}/flags/${encodeURIComponent(id)}`, { action }); await refresh(); });
+const decideLease = (action) => guarded(async () => { await send("POST", `/api/leases/${reviewId}/${action}`); await refresh(); });
+
+async function refresh() {
+  await loadUnits();
+  if (reviewId && !$("review").hidden) await openReview(reviewId);
+  if (selectedUnit) await openUnit(selectedUnit);
+}
+
+$("leaseFile").onchange = async (e) => {
+  $("uploadErr").textContent = "";
+  const fd = new FormData(); fd.append("file", e.target.files[0]);
+  try {
+    const lease = await api("/api/leases", { method: "POST", body: fd });
+    e.target.value = "";
+    if (lease.unit_id) selectedUnit = lease.unit_id;
+    await openReview(lease.id); await loadUnits();
+    if (selectedUnit) await openUnit(selectedUnit);
+  } catch (err) { $("uploadErr").textContent = err.message; }
+};
+loadUnits();
+</script>
+</body>
+</html>

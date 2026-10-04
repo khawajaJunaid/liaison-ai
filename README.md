@@ -1,0 +1,201 @@
+# Lease and issue agent
+
+A small full-stack service for a property owner (the sample data is Marina Crest Holdings, Doha):
+
+- **Part A, lease record.** Upload a lease PDF. The agent reads it into a structured record where
+  every value points back to the page, box and quote it came from, flags what a human should check,
+  validates it against the owner's ruleset (PASS / FAIL / NOT_DETERMINABLE with reasons), matches it
+  to a unit and, once a person accepts it, marks that unit occupied.
+- **Part B, issue reporting.** Upload photos of a problem. The agent assesses condition, lists the
+  equipment it sees, and drafts a work order.
+- **Together.** Open a unit and see its lease and every issue raised against it on one screen. A person
+  can accept, reject or override each extracted field, each flag and each work order. Every decision
+  lands in an audit trail.
+
+## Run it
+
+Python 3.12+. No API key is needed for the default setup.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
+uvicorn app.main:app --reload           # http://127.0.0.1:8000
+pytest                                  # 94 tests, offline, about 2 seconds
+```
+
+Try it with the samples:
+
+| Sample | What to expect |
+|---|---|
+| `samples/lease_good.pdf` | All 7 rules pass, unit `MC-B-1204` matched. Accept it and the unit turns occupied. |
+| `samples/lease_defective.pdf` | Every rule fails: deposit under one month, 48-month term whose dates span 36, vague escalation, unsigned tenant, annual rent that does not reconcile, conflicting start dates, and the unit is already occupied. Accepting is blocked until you correct the unit and decide the high-severity flags. |
+| `samples/lease_scanned.pdf` | No text layer. Without OCR it is flagged as unreadable and rules report NOT_DETERMINABLE rather than failing. |
+| `samples/photos/*.jpg` | Placeholders. The stub vision model reads the **file name** (`ac_unit_water_leak.jpg`) and your note. |
+
+### API keys and optional engines
+
+| Setting | What it enables | Needs |
+|---|---|---|
+| default | Everything, with a deterministic stub for photo assessment | nothing |
+| `LEASE_AGENT_VISION=anthropic` | Real photo assessment with a vision model | `pip install anthropic`, `ANTHROPIC_API_KEY`; optional `VISION_MODEL` (default `claude-sonnet-5-5`) |
+| `LEASE_AGENT_OCR=paddle` | OCR for scanned leases with PaddleOCR-VL | `pip install "paddleocr[doc-parser]"` (multi-GB model download, runs locally, no key) |
+
+Both optional engines are written but **not exercised in this repo's tests**: the photo parser is unit
+tested with fake model replies, and OCR routing is tested with a fake engine. Neither has been run
+against the live service, so check them first when you plug in your keys.
+
+## How it works
+
+```
+Part A                                            Part B
+PDF ─► text + boxes (OCR only for scanned pages)  photos (+ note) ─► vision model (interface)
+   ─► field extraction with provenance               ─► condition, damage, equipment per photo
+   ─► self-check (missing, conflicts, odd values)    ─► draft work order (title, detail, priority)
+   ─► owner rules R1-R7                                   │
+   ─► flags                                               │
+   ─► HUMAN: accept / reject / override                   ├─► HUMAN: accept / edit / reject
+   ─► accept lease ─► unit occupied                       │
+                      └────────── both attach to the unit ┘
+                       GET /api/units/{id}: lease + issues + audit, one screen
+```
+
+### Key decisions
+
+**1. A model only where it earns its place.** Leases are regular legal prose, and the rules are
+arithmetic. So the lease side has no LLM: text-layer extraction, regex clauses, and a deterministic
+rule engine. That makes results repeatable, cheap, testable, and able to cite the exact clause. A
+pattern that fails returns an empty field that gets flagged, instead of a plausible guess. Reading a
+photo is the one step that genuinely needs a model, so it sits behind a `VisionModel` interface
+(`app/vision.py`). The same reasoning drives the parser: a wrong rent or date is a real cost to
+someone, so loud failure beats fluent hallucination.
+
+**2. Agents as loops with a human gate, not a form with an LLM attached.** `LeaseAgent` runs read,
+extract, self-check, validate, flag, then waits. A human override re-runs validation and re-derives
+the flags, and decisions already made on unchanged flags survive (flag ids are stable, `kind.field`).
+`IssueAgent` assesses each photo, merges findings and drafts, and never dispatches anything.
+Each run records a step trace that the UI shows.
+
+**3. Traceability is the data model.** Every `ExtractedField` carries `{page, bbox, quote}`,
+a confidence and a decision (`pending / accepted / rejected / overridden`), and keeps the agent's
+original value after an override. The UI draws the source box on the page image. Rejected fields are
+treated as missing by the rules, so rejecting a value cannot silently pass a rule.
+
+**4. OCR only when needed, and the best open one when it is.** Digital PDFs already carry text and
+coordinates, so they never touch OCR. A page without a text layer goes to an `OcrEngine`. I surveyed
+2026 benchmarks and chose **PaddleOCR-VL-1.6** (about 0.9B parameters, Apache-2.0, 96.34 on
+OmniDocBench v1.6, and first on the scanned Real5 subset; MinerU2.5-Pro scored 95.75 and GLM-OCR 95.22).
+It runs locally, which matters for lease text. Sources:
+[Roboflow ranking](https://blog.roboflow.com/best-open-source-ocr-models/),
+[Docsumo comparison](https://www.docsumo.com/blog/best-ocr-models),
+[OmniDocBench](https://github.com/opendatalab/OmniDocBench). The interface keeps it swappable, and a
+few leaderboard points are not a reason to lock in. Run it on real Doha leases before trusting it.
+
+**5. The unit is the join.** Leases and issues both reference `unit_id`. `GET /api/units/{id}`
+returns the accepted lease, leases awaiting review, all issues with their work orders, and the audit
+trail. Unit status is an overlay in the database over the supplied `units.json`, so the seed file
+stays untouched and occupancy changes only when a person accepts a lease.
+
+**6. The ruleset drives the engine; code supplies one function per rule id.** The file decides which
+rules run and their severity. I did not `eval` the `check` strings. A rule id with no function reports
+NOT_DETERMINABLE, so adding a rule to the JSON can never silently pass.
+
+### Decisions you might disagree with
+
+- **Term vs dates (R4)** accepts both end-date conventions: 1 Mar 2026 to 28 Feb 2027 and to 1 Mar 2027
+  both count as 12 months.
+- **Absence of evidence.** On a document that could not be read at all, "no escalation clause" and
+  "parties not identified" are NOT_DETERMINABLE, not FAIL.
+- **Accepting a lease** requires: a matched, available unit; no undecided high-severity flag. Lower
+  severity flags do not block.
+- **Signatures** are judged from the text layer (letters after the signature label). A handwritten
+  signature on a scan is not verified, and the field says so.
+- **Dates** like `01/03/2026` are read day-first.
+
+## What I left out
+
+- Authentication, roles and multi-tenancy. Everything is one owner, one trust boundary.
+- Image-based leases other than PDF; multi-document leases (amendments, addenda, annexes).
+- Arabic and bilingual leases. Common in Doha, and the first thing I would test, but the clause
+  patterns here are English only.
+- Verifying handwritten signatures or stamps visually.
+- Dispatching work orders to vendors, tenant notifications, comments.
+- Real sample photos: the brief's photos were not supplied, so the images here are placeholders and the
+  stub reads their names. The vision path is the least validated part of this repo.
+- Rent schedule, cheques and payments.
+
+## Where it breaks first at scale
+
+1. **Synchronous processing.** OCR and vision calls run inside the request. Move to a job queue with
+   status polling before the first 50-page scan.
+2. **SQLite plus one lock.** Fine for a demo, a single writer in production. The `Store` class is the
+   only place that knows, so swapping in Postgres is one class. Leases and issues are JSON documents,
+   and `list_leases()` scans every lease, which the unit view calls. Needs real columns and indexes.
+3. **Local file storage** for PDFs and photos. Needs object storage and retention rules.
+4. **Pattern coverage.** The regex parser is exact on the clause layouts it knows. Each new lease template
+   is a new pattern. The planned answer is a model that fills **only** the fields the parser left empty,
+   still carrying a source quote that the code verifies exists in the document, and with every one of
+   them sent to review. It is deliberately not built yet.
+5. **Ruleset growth.** Per-rule Python is clear for 7 rules. At 70, per-owner and versioned, it wants a
+   small declarative rule format.
+6. **Unbounded audit and no review queue.** Reasonable at ten leases, not at ten thousand.
+
+## Product enhancement ideas
+
+I would build these roughly in this order, and the first three come from the same observation: the unit
+is the join between the lease and what happens in the unit, and nobody is using that yet.
+
+1. **Let the lease decide who pays.** Extract the maintenance and responsibility clauses and, when an
+   issue is reported, say whether it looks like an owner or a tenant cost, quoting the clause. Today the
+   two features share a screen; this makes them share a decision. It turns a work order from "something
+   is broken" into "owner's cost, vendor needed, here is the clause".
+2. **Move-in and move-out condition baselines.** Photos at handover become the baseline for the unit.
+   At move-out the agent diffs against it and drafts a deposit-deduction case with before and after
+   evidence. Deposit disputes are where a wrong condition call costs real money, and it reuses Part B
+   unchanged.
+3. **Equipment registry per unit.** Part B already lists the AC, heater and appliances it sees. Keep them
+   as assets with age and warranty, so a repeat leak on the same AC becomes "third call in four months,
+   replace it" instead of three unrelated tickets. In construction terms this is also a defects-liability
+   tracker: whether a defect is still inside the contractor's warranty window.
+4. **An obligations calendar from the lease.** Expiry, renewal-notice deadlines, escalation dates, and
+   the early-termination notice period are already extracted. Turn them into dated reminders so the owner
+   acts 90 days before a lease ends instead of finding out at expiry.
+5. **Review by exception.** Every override is a labelled example. Track the override rate per field, and
+   let leases that pass all rules with high-confidence fields go to a quick one-click review while risky
+   ones get the full screen. The aim is to shrink review time without removing the human, and the override
+   rate is the number that says whether it is safe.
+6. **Tenant intake where tenants already are.** A WhatsApp-style photo intake with a follow-up question
+   ("is the water still coming out?") feeds the same issue agent, which is how a stub becomes a product
+   people use.
+7. **Per-owner rule packs, with a simulator.** Let an owner edit rules in plain language, and replay them
+   over past leases ("how many existing leases would this new 24-month cap have flagged?") before saving.
+8. **Portfolio view.** Occupancy, leases expiring in 90 days, open work orders by priority, and rent roll.
+
+Measures I would watch from day one: time from upload to accepted record, override rate per field,
+share of work orders accepted unedited, and the rate of "confirmed" flags that were real.
+
+## Layout
+
+```
+app/
+  domain.py    models: Field + provenance, Flag, RuleResult, Lease, Issue, WorkOrder
+  ingest.py    PDF to positioned lines; OcrEngine interface and routing
+  extract.py   rule-based field extraction
+  rules.py     R1-R7 engine
+  units.py     unit registry and matching
+  agents.py    LeaseAgent, IssueAgent, human-decision handling
+  vision.py    VisionModel interface, StubVision, AnthropicVision
+  ocr_paddle.py optional PaddleOCR-VL engine
+  store.py     SQLite persistence and audit log
+  main.py      FastAPI app
+  static/      single-page UI
+seed/          units.json and owner_ruleset.json as supplied
+scripts/       sample generator
+tests/         94 tests
+```
+
+## Honest status
+
+Tested: the rule engine, extraction and provenance, OCR routing (with a fake engine), unit matching, the
+whole review flow over HTTP, and input validation. Not tested live: PaddleOCR-VL and the Anthropic vision
+call. The UI is exercised only by hand. Photo assessment from the stub is keyword-driven by design.
