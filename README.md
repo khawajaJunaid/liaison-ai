@@ -1,4 +1,8 @@
-# Lease and issue agent
+# liAIson
+
+*A lease and issue agent for property owners. It reads the paperwork and photos, shows its working,
+and leaves every decision to a person.* It sits between the documents and the owner, and links the two
+things that are usually kept apart: a unit's lease and the problems reported in it.
 
 A small full-stack service for a property owner (the sample data is Marina Crest Holdings, Doha):
 

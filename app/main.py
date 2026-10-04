@@ -61,7 +61,7 @@ def _safe_name(name: str, index: int) -> str:
 
 def create_app(data_dir: Path | None = None, vision: VisionModel | None = None,
                ocr: OcrEngine | None = None) -> FastAPI:
-    app = FastAPI(title="Lease and issue agent")
+    app = FastAPI(title="liAIson")
     store = Store(data_dir or DEFAULT_DATA_DIR)
     units = UnitRegistry(SEED_DIR / "units.json")
     ruleset = load_ruleset(SEED_DIR / "owner_ruleset.json")
