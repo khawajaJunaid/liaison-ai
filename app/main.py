@@ -5,7 +5,6 @@ any leases awaiting review, and every issue (with its draft work order) raised a
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -15,10 +14,11 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadF
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .agents import IssueAgent, LeaseAgent
-from .config import DEFAULT_DATA_DIR, SEED_DIR
+from .agents import DEFAULT_ISSUE_STEPS, DEFAULT_LEASE_STEPS, IssueAgent, LeaseAgent
+from .config import DEFAULT_DATA_DIR, SEED_DIR, Settings
 from .domain import new_id
-from .ingest import OcrEngine
+from .ingest import OcrEngine, make_ocr
+from .pipeline import available_steps
 from .rules import load_ruleset
 from .store import Store
 from .units import UnitRegistry
@@ -46,27 +46,23 @@ class WorkOrderDecision(BaseModel):
     description: str | None = None
 
 
-def _make_ocr() -> OcrEngine | None:
-    if os.environ.get("LEASE_AGENT_OCR", "").lower() == "paddle":
-        from .ocr_paddle import PaddleOcrEngine
-
-        return PaddleOcrEngine()
-    return None
-
-
 def _safe_name(name: str, index: int) -> str:
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name or "photo").name).strip("._") or "photo"
     return f"{index}_{base}"
 
 
 def create_app(data_dir: Path | None = None, vision: VisionModel | None = None,
-               ocr: OcrEngine | None = None) -> FastAPI:
+               ocr: OcrEngine | None = None, settings: Settings | None = None) -> FastAPI:
+    """Build the app. Engines and step lists come from `settings` (environment by default);
+    `vision` and `ocr` override the engines directly, which is how tests inject fakes."""
+    settings = settings or Settings.from_env()
     app = FastAPI(title="liAIson")
     store = Store(data_dir or DEFAULT_DATA_DIR)
     units = UnitRegistry(SEED_DIR / "units.json")
     ruleset = load_ruleset(SEED_DIR / "owner_ruleset.json")
-    lease_agent = LeaseAgent(units, ruleset, ocr if ocr is not None else _make_ocr())
-    issue_agent = IssueAgent(vision or make_vision())
+    lease_agent = LeaseAgent(units, ruleset, ocr if ocr is not None else make_ocr(settings.ocr),
+                             steps=settings.lease_steps)
+    issue_agent = IssueAgent(vision or make_vision(settings.vision), steps=settings.issue_steps)
     (store.dir / "leases").mkdir(exist_ok=True)
 
     def lease_or_404(lease_id: str):
@@ -123,6 +119,17 @@ def create_app(data_dir: Path | None = None, vision: VisionModel | None = None,
     @app.get("/api/rules")
     def rules():
         return ruleset
+
+    @app.get("/api/pipelines")
+    def pipelines():
+        """The steps each agent runs, in order, and every step that could be added."""
+        return {
+            "lease": {"steps": lease_agent.pipeline.names, "default": list(DEFAULT_LEASE_STEPS),
+                      "available": available_steps("lease")},
+            "issue": {"steps": issue_agent.pipeline.names, "default": list(DEFAULT_ISSUE_STEPS),
+                      "available": available_steps("issue")},
+            "engines": {"ocr": settings.ocr, "vision": issue_agent.vision.name},
+        }
 
     # ---- leases ---------------------------------------------------------
 

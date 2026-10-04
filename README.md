@@ -25,7 +25,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
 uvicorn app.main:app --reload           # http://127.0.0.1:8000
-pytest                                  # 94 tests, offline, about 2 seconds
+pytest                                  # 112 tests, offline, about 2 seconds
 ```
 
 Try it with the samples:
@@ -44,6 +44,7 @@ Try it with the samples:
 | default | Everything, with a deterministic stub for photo assessment | nothing |
 | `LEASE_AGENT_VISION=anthropic` | Real photo assessment with a vision model | `pip install anthropic`, `ANTHROPIC_API_KEY`; optional `VISION_MODEL` (default `claude-sonnet-5-5`) |
 | `LEASE_AGENT_OCR=paddle` | OCR for scanned leases with PaddleOCR-VL | `pip install "paddleocr[doc-parser]"` (multi-GB model download, runs locally, no key) |
+| `LEASE_AGENT_LEASE_STEPS`, `LEASE_AGENT_ISSUE_STEPS` | Change which steps each agent runs, and in what order (comma-separated names) | nothing; see [Editing the pipeline](#editing-the-pipeline) |
 
 Both optional engines are written but **not exercised in this repo's tests**: the photo parser is unit
 tested with fake model replies, and OCR routing is tested with a fake engine. Neither has been run
@@ -103,6 +104,53 @@ stays untouched and occupancy changes only when a person accepts a lease.
 **6. The ruleset drives the engine; code supplies one function per rule id.** The file decides which
 rules run and their severity. I did not `eval` the `check` strings. A rule id with no function reports
 NOT_DETERMINABLE, so adding a rule to the JSON can never silently pass.
+
+### Editing the pipeline
+
+An agent is a list of registered **steps**, not a hard-coded function. The defaults are:
+
+```
+lease:  read_pdf → extract_fields → match_unit → validate_rules → self_check
+issue:  assess_photos → summarise → draft_work_order
+```
+
+Each step does one job and declares what it `needs` and what it `provides`. `GET /api/pipelines` shows the
+active lists and every step that could be added.
+
+| I want to | Do this |
+|---|---|
+| Drop a step (assessment-only issue agent, no flags) | `LEASE_AGENT_ISSUE_STEPS=assess_photos,summarise` |
+| Reorder or change engines | Set the step list; set `LEASE_AGENT_OCR` / `LEASE_AGENT_VISION` |
+| Add a task (market-rent check, vendor routing, an Arabic translation step) | Write one class, register it, add its name to the list |
+
+```python
+@register("lease", "check_market_rent")
+class CheckMarketRent(BaseStep):
+    """Flag rent far above the going rate for the building."""
+    needs = frozenset({"fields", "flags"})
+    provides = frozenset({"market_check"})
+    rerun = True                       # run again after a human override
+    def run(self, ctx): ...            # read ctx.lease, append a Flag
+```
+
+What keeps this safe to edit:
+
+- **A bad list fails when the app starts,** not on the first upload. An unknown name, a step placed before
+  what it needs, or a missing service (a step that needs OCR with none configured) raises `PipelineError`
+  listing what is available.
+- **A step that fails is named** (`lease step 'check_market_rent' failed: ...`) and the upload returns a clear 422.
+- **`rerun` steps are the deterministic ones.** After a human overrides a field, only steps marked `rerun`
+  run again (`match_unit`, `validate_rules`, `self_check`). The PDF is not re-read, and decisions already
+  made on unchanged flags survive.
+- **The human gate stays outside the pipeline.** Accept, reject and override are separate API calls, and the
+  accept endpoint enforces its own checks (a matched, available unit; every high-severity flag decided)
+  whatever steps ran before it. The shipped steps never set a lease's status. A custom step could, so
+  review new steps like any code that touches decisions.
+
+The step lists live in code (`DEFAULT_LEASE_STEPS`, `DEFAULT_ISSUE_STEPS`) with environment overrides.
+A YAML pipeline file with per-owner step options is the obvious next step, and the registry is what it
+would be built on. I stopped short of it because the brief asks for a small service, and an untested config
+language would be more surface than value.
 
 ### Decisions you might disagree with
 
@@ -187,7 +235,10 @@ app/
   extract.py   rule-based field extraction
   rules.py     R1-R7 engine
   units.py     unit registry and matching
-  agents.py    LeaseAgent, IssueAgent, human-decision handling
+  pipeline.py  Step, registry, Pipeline: validates the step list, runs it, names failures
+  lease_steps.py  read_pdf, extract_fields, match_unit, validate_rules, self_check
+  issue_steps.py  assess_photos, summarise, draft_work_order
+  agents.py    LeaseAgent, IssueAgent (a step list each) and human-decision handling
   vision.py    VisionModel interface, StubVision, AnthropicVision
   ocr_paddle.py optional PaddleOCR-VL engine
   store.py     SQLite persistence and audit log
@@ -195,7 +246,7 @@ app/
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
 scripts/       sample generator
-tests/         94 tests
+tests/         112 tests
 ```
 
 ## Honest status

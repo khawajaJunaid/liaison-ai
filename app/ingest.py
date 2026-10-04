@@ -44,6 +44,17 @@ class NullOcr:
         raise OcrUnavailable("no OCR engine configured (set LEASE_AGENT_OCR=paddle)")
 
 
+def make_ocr(name: str) -> OcrEngine | None:
+    """Build the OCR engine named in settings. An unknown name fails at startup, not on a scan."""
+    if name in ("", "none"):
+        return None
+    if name == "paddle":
+        from .ocr_paddle import PaddleOcrEngine  # optional heavy dependency, imported on demand
+
+        return PaddleOcrEngine()
+    raise ValueError(f"unknown OCR engine '{name}' (expected none or paddle)")
+
+
 @dataclass
 class Document:
     lines: list[Line]
