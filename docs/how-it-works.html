@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How liAIson works</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --mute:#667085; --line:#dfe3ea; --blue:#1d4ed8; --blue-bg:#eef3ff;
+          --ok:#157f4b; --ok-bg:#ecfdf3; --bad:#b42318; --bad-bg:#fef3f2; --warn:#b54708; --warn-bg:#fffaeb; --paper:#fffef9; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f141c; --card:#171d28; --ink:#e6e9ef; --mute:#98a2b3; --line:#2a3342; --blue:#7aa2ff; --blue-bg:#1b2742;
+            --ok:#4ade80; --ok-bg:#12281d; --bad:#f87171; --bad-bg:#2d1618; --warn:#fbbf24; --warn-bg:#2b2313; --paper:#1c2230; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, sans-serif; }
+  .wrap { max-width:1120px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 2px; } .sub { color:var(--mute); margin:0 0 16px; }
+  .tabs, .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  button, select { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px 12px; cursor:pointer; }
+  button:hover { border-color:var(--blue); }
+  button.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .blurb { color:var(--mute); margin:0 0 14px; }
+  .pipe { position:relative; display:flex; gap:0; align-items:stretch; margin:22px 0 6px; padding:0 4px; }
+  .node { flex:1; min-width:0; text-align:center; padding:10px 6px; border:2px solid var(--line); border-radius:10px; background:var(--card);
+          transition:all .35s; position:relative; z-index:1; }
+  .node b { display:block; font-size:14px; } .node small { color:var(--mute); font:11px ui-monospace, monospace; }
+  .node.active { border-color:var(--blue); background:var(--blue-bg); transform:translateY(-3px); box-shadow:0 6px 18px rgba(29,78,216,.18); }
+  .node.done { border-color:var(--ok); } .node.done b::after { content:" ✓"; color:var(--ok); }
+  .node.gate { border-style:dashed; }
+  .node.gate.active.ok { border-color:var(--ok); background:var(--ok-bg); } .node.gate.active.bad { border-color:var(--bad); background:var(--bad-bg); }
+  .node.gate.active.warn { border-color:var(--warn); background:var(--warn-bg); }
+  .link { width:22px; align-self:center; height:2px; background:var(--line); flex:none; position:relative; z-index:0; }
+  .packet { position:absolute; top:-12px; width:18px; height:18px; border-radius:50%; background:var(--blue); box-shadow:0 0 0 6px rgba(29,78,216,.18);
+            transition:left .7s cubic-bezier(.5,0,.2,1); z-index:2; transform:translateX(-50%); }
+  .bracket { position:relative; height:34px; margin:0 4px 4px; font-size:12px; color:var(--mute); }
+  .bracket span { position:absolute; top:0; border:1.5px dashed var(--line); border-top:none; border-radius:0 0 10px 10px; padding:6px 8px 0; text-align:center; height:34px; }
+  .stage { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; }
+  @media (max-width: 820px) { .stage { grid-template-columns:1fr; } .pipe { flex-wrap:wrap; gap:6px; } .link, .packet, .bracket { display:none; } }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-height:300px; }
+  .panel h2 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); margin:0 0 10px; font-weight:600; }
+  .paper { background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:12px 14px; font:12.5px/1.65 ui-monospace, monospace; }
+  .paper .ln { padding:0 4px; border-radius:3px; transition:background .4s; white-space:pre-wrap; }
+  .paper .ln.hit { background:rgba(250,204,21,.35); }
+  .scan { border:1px solid var(--line); border-radius:6px; height:250px; display:grid; place-items:center; text-align:center; color:var(--mute);
+          background:repeating-linear-gradient(135deg, var(--paper), var(--paper) 10px, var(--line) 10px, var(--line) 11px); padding:20px; }
+  .photo { border:1px solid var(--line); border-radius:8px; height:170px; display:grid; place-items:center; color:var(--mute); text-align:center;
+           background:linear-gradient(135deg, var(--blue-bg), var(--paper)); padding:14px; }
+  .step-title { font-weight:600; } .step-does { color:var(--mute); margin:2px 0 10px; font-size:13px; }
+  .out { list-style:none; padding:0; margin:0; font-size:13px; }
+  .out li { padding:4px 8px; margin:3px 0; border-radius:6px; border-left:3px solid var(--line); background:var(--bg);
+            animation:in .35s ease both; word-break:break-word; }
+  .out li.ok { border-color:var(--ok); background:var(--ok-bg); } .out li.bad { border-color:var(--bad); background:var(--bad-bg); }
+  .out li.warn { border-color:var(--warn); background:var(--warn-bg); }
+  @keyframes in { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
+  .gatecard { border:2px solid var(--line); border-radius:10px; padding:12px; margin-top:10px; animation:in .4s ease both; }
+  .gatecard.ok { border-color:var(--ok); background:var(--ok-bg); } .gatecard.bad { border-color:var(--bad); background:var(--bad-bg); }
+  .gatecard.warn { border-color:var(--warn); background:var(--warn-bg); }
+  .unit { display:inline-flex; gap:8px; align-items:center; margin-top:8px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  .chip { padding:1px 10px; border-radius:99px; font-size:12px; border:1px solid var(--line); transition:all .6s; }
+  .chip.available { color:var(--ok); background:var(--ok-bg); border-color:var(--ok); } .chip.occupied { color:var(--bad); background:var(--bad-bg); border-color:var(--bad); }
+  .foot { margin-top:22px; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+  .foot code { background:var(--bg); padding:1px 6px; border-radius:5px; font-size:13px; }
+  .muted { color:var(--mute); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>How liAIson works</h1>
+  <p class="sub">A replay of the real pipeline. Every line shown was produced by running the code on the sample files.</p>
+
+  <div class="tabs" id="tabs" role="tablist" aria-label="Scenario"></div>
+  <div class="controls">
+    <button id="play" aria-label="Play or pause">Play</button>
+    <button id="step" aria-label="Next step">Next step</button>
+    <button id="restart" aria-label="Restart">Restart</button>
+    <label class="muted">Speed <select id="speed"><option value="1.6">Slow</option><option value="1" selected>Normal</option><option value="0.5">Fast</option></select></label>
+  </div>
+  <p class="blurb" id="blurb"></p>
+
+  <div class="pipe" id="pipe"><div class="packet" id="packet" style="left:0"></div></div>
+  <div class="bracket" id="bracket"></div>
+
+  <div class="stage">
+    <div class="panel"><h2 id="inTitle">Input</h2><div id="input"></div></div>
+    <div class="panel" aria-live="polite"><h2>What this step produced</h2>
+      <div class="step-title" id="stepTitle">Press Play</div><div class="step-does" id="stepDoes"></div>
+      <ul class="out" id="out"></ul><div id="gate"></div></div>
+  </div>
+
+  <div class="foot">
+    <b>The pipeline is a list.</b> Each box is a registered step that declares what it needs and what it provides.
+    Reorder, drop or add steps without touching the agent:
+    <div style="margin-top:6px"><code>LEASE_AGENT_LEASE_STEPS=read_pdf,extract_fields,match_unit,validate_rules,self_check</code></div>
+    <div class="muted" style="margin-top:6px">After a person overrides a field, only the dashed-bracket steps run again. The PDF is not re-read. The human gate is outside the pipeline: accept, reject and override are separate calls, so the pipeline never accepts a lease on its own.</div>
+  </div>
+</div>
+<script src="traces.js"></script>
+<script>
+const LABEL = { read_pdf:"Read", extract_fields:"Extract", match_unit:"Match unit", validate_rules:"Check rules", self_check:"Flag problems",
+                assess_photos:"Assess photos", summarise:"Summarise", draft_work_order:"Draft work order" };
+const DOES = {
+  read_pdf:"Turns the PDF into text lines, each with a position. Only an image page would need OCR.",
+  extract_fields:"Finds each value and remembers the exact line it came from. Gaps stay empty, never guessed.",
+  match_unit:"Matches the unit named in the lease to the owner's unit records.",
+  validate_rules:"Runs the owner's seven rules: pass, fail or cannot tell, each with a reason.",
+  self_check:"Raises flags a person should look at: gaps, conflicts, contradictions, odd values.",
+  assess_photos:"The one step that needs a model: condition, visible damage and equipment for each photo.",
+  summarise:"One line: how many photos, worst condition, how many findings.",
+  draft_work_order:"Drafts a work order from the findings. It only drafts; a person accepts it." };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+let sc, cur = -1, playing = false, run = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms * Number($("speed").value)));
+
+function buildTabs() {
+  TRACES.forEach((t, i) => {
+    const b = document.createElement("button");
+    b.textContent = t.title; b.setAttribute("role", "tab");
+    b.onclick = () => select(i);
+    $("tabs").appendChild(b);
+  });
+}
+
+function select(i, autoplay = false) {
+  run++; playing = false; sc = TRACES[i]; cur = -1; $("play").textContent = "Play";
+  [...$("tabs").children].forEach((b, j) => b.classList.toggle("on", j === i));
+  $("blurb").textContent = sc.blurb;
+  buildPipe(); buildInput();
+  $("out").innerHTML = ""; $("gate").innerHTML = ""; $("stepTitle").textContent = "Press Play"; $("stepDoes").textContent = "";
+  if (autoplay) { playing = true; $("play").textContent = "Pause"; auto(); }
+}
+
+function placeBracket() {
+  const br = $("bracket"); br.innerHTML = "";
+  if (!sc || sc.kind !== "lease") return;
+  const idx = (n) => sc.steps.findIndex((s) => s.name === n);
+  const a = $("node-" + idx("match_unit")), b = $("node-" + idx("self_check"));
+  if (!a || !b) return;
+  const s = document.createElement("span");
+  s.style.left = a.offsetLeft - 4 + "px"; s.style.width = b.offsetLeft + b.offsetWidth - a.offsetLeft + "px";
+  s.textContent = "after a person overrides a field, only these steps run again";
+  br.appendChild(s);
+}
+
+function buildPipe() {
+  const pipe = $("pipe"); [...pipe.querySelectorAll(".node,.link")].forEach((n) => n.remove());
+  const names = [...sc.steps.map((s) => s.name), "gate"];
+  names.forEach((n, i) => {
+    if (i) { const l = document.createElement("div"); l.className = "link"; pipe.appendChild(l); }
+    const d = document.createElement("div"); d.className = "node" + (n === "gate" ? " gate" : ""); d.id = "node-" + i;
+    d.innerHTML = n === "gate" ? "<b>A person decides</b><small>human gate</small>" : `<b>${LABEL[n]}</b><small>${n}</small>`;
+    pipe.appendChild(d);
+  });
+  $("packet").style.left = "0px";
+  placeBracket();
+}
+
+function buildInput() {
+  const el = $("input");
+  if (sc.kind === "issue") {
+    $("inTitle").textContent = "Input: photos and a note";
+    el.innerHTML = sc.photos.map((p) => `<div class="photo"><div><b>photo</b><br>${esc(p)}</div></div>`).join("") +
+      `<p class="muted" style="margin-top:10px">${sc.note ? "Note: “" + esc(sc.note) + "”" : "No note from the reporter."}</p>`;
+    return;
+  }
+  $("inTitle").textContent = "Input: the lease";
+  if (!sc.document.length) { el.innerHTML = '<div class="scan"><div><b>Scanned page</b><br>an image with no text to read</div></div>'; return; }
+  el.innerHTML = '<div class="paper">' + sc.document.map((t, i) => `<div class="ln" id="ln-${i}"></div>`).join("") + "</div>";
+  sc.document.forEach((t, i) => { $("ln-" + i).textContent = t; });
+}
+
+function highlightFor(text) {
+  const field = text.split(" = ")[0].replace(/ /g, "_");
+  const quote = sc.marks && sc.marks[field];
+  if (!quote) return;
+  sc.document.forEach((t, i) => { if (t.trim() && quote.includes(t.trim())) $("ln-" + i).classList.add("hit"); });
+}
+
+async function show(i) {
+  const my = ++run, last = sc.steps.length;
+  cur = i;
+  for (let k = 0; k <= last; k++) { const n = $("node-" + k); n.classList.remove("active", "done", "ok", "bad", "warn"); if (k < i) n.classList.add("done"); }
+  const node = $("node-" + i); node.classList.add("active");
+  $("packet").style.left = node.offsetLeft + node.offsetWidth / 2 + "px";
+  $("out").innerHTML = ""; $("gate").innerHTML = "";
+  document.querySelectorAll(".ln.hit").forEach((x) => x.classList.remove("hit"));
+
+  if (i === last) {  // the human gate
+    node.classList.add(sc.gate.tone);
+    $("stepTitle").textContent = "A person decides";
+    $("stepDoes").textContent = "The pipeline only prepares. Decisions are made by a person and are audited.";
+    await sleep(500); if (my !== run) return;
+    let html = `<div class="gatecard ${sc.gate.tone}"><b>${esc(sc.gate.title)}</b>` + sc.gate.lines.map((l) => `<div>${esc(l.text)}</div>`).join("");
+    const u = sc.gate.unit;  // the unit's real status from the owner records, not an assumed one
+    if (sc.kind === "lease" && u) html += `<div class="unit"><span>${esc(u.id)}</span><span class="chip ${esc(u.status)}" id="chip">${esc(u.status)}</span></div>`;
+    $("gate").innerHTML = html + "</div>";
+    if (sc.kind === "lease" && sc.gate.tone === "ok") {
+      await sleep(900); if (my !== run) return;
+      $("chip").className = "chip occupied"; $("chip").textContent = "occupied";
+    }
+    return;
+  }
+
+  const step = sc.steps[i];
+  $("stepTitle").textContent = `${i + 1}. ${LABEL[step.name]}  (${step.name})`;
+  $("stepDoes").textContent = DOES[step.name];
+  for (const l of step.output) {
+    if (my !== run) return;
+    const li = document.createElement("li"); li.className = l.tone; li.textContent = l.text; $("out").appendChild(li);
+    if (step.name === "extract_fields") highlightFor(l.text);
+    await sleep(step.output.length > 8 ? 160 : 320);
+  }
+  if (my !== run) return;
+  await sleep(700);
+}
+
+async function auto() {
+  while (playing && cur < sc.steps.length) await show(cur + 1);
+  if (cur >= sc.steps.length) { playing = false; $("play").textContent = "Play again"; }
+}
+
+$("play").onclick = () => {
+  if (cur >= sc.steps.length) cur = -1;
+  playing = !playing; $("play").textContent = playing ? "Pause" : "Play";
+  if (playing) auto();
+};
+$("step").onclick = () => {
+  playing = false; $("play").textContent = "Play";
+  if (cur >= sc.steps.length) cur = -1;
+  show(cur + 1);
+};
+$("restart").onclick = () => select(TRACES.indexOf(sc), true);
+window.addEventListener("resize", placeBracket);
+
+buildTabs(); select(0, true);
+</script>
+</body>
+</html>

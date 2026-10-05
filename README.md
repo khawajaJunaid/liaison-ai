@@ -69,6 +69,11 @@ engine for routing), but a real call can still differ, so run the script above f
 
 ## How it works
 
+**Watch it run:** open [`docs/how-it-works.html`](docs/how-it-works.html) in a browser (no server needed).
+It replays the real pipeline step by step for five cases: a clean lease, a lease with problems, a scan
+with no OCR, a clear photo and an unclear photo. Every line it shows comes from running the code on the
+sample files (`python -m scripts.export_trace` regenerates it), so it cannot drift from the code.
+
 ```
 Part A                                            Part B
 PDF ─► text + boxes (OCR only for scanned pages)  photos (+ note) ─► vision model (interface)
