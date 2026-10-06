@@ -25,7 +25,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
 uvicorn app.main:app --reload           # http://127.0.0.1:8000
-pytest                                  # 121 tests, offline, about 2 seconds
+pytest                                  # 129 tests, offline, about 2 seconds
 ```
 
 Try it with the samples:
@@ -45,7 +45,8 @@ Try it with the samples:
 | `LEASE_AGENT_VISION=anthropic` | Real photo assessment with Anthropic | `pip install anthropic`, `ANTHROPIC_API_KEY`; optional `VISION_MODEL` (default `claude-sonnet-5-5`) |
 | `LEASE_AGENT_VISION=openai` | Real photo assessment with OpenAI | `pip install openai`, `OPENAI_API_KEY`; optional `VISION_MODEL` (default `gpt-4o`, change it to whichever vision model your key can use) |
 | `LEASE_AGENT_VISION=openai` plus `OPENAI_BASE_URL` | A local or other OpenAI-compatible server (Ollama, vLLM, LM Studio) | no real key; set `VISION_MODEL` to a vision-capable model that server hosts |
-| `LEASE_AGENT_OCR=paddle` | OCR for scanned leases with PaddleOCR-VL | `pip install "paddleocr[doc-parser]"` (multi-GB model download, runs locally, no key) |
+| `LEASE_AGENT_OCR=paddle` | OCR for scanned leases (PP-OCR, line-level boxes, CPU). **Verified end to end** | `pip install -r requirements-ocr.txt`; downloads about 20 MB of models on first use; runs locally, no key. `LEASE_AGENT_OCR_LANG=ar` for Arabic (untested) |
+| `LEASE_AGENT_OCR=paddle-vl` | PaddleOCR-VL: higher benchmark score, paragraph-level boxes. **Not run here** | needs PaddlePaddle 3.2 or newer (not published for Intel macOS); several GB of models |
 | `LEASE_AGENT_LEASE_STEPS`, `LEASE_AGENT_ISSUE_STEPS` | Change which steps each agent runs, and in what order (comma-separated names) | nothing; see [Editing the pipeline](#editing-the-pipeline) |
 
 Install the provider SDKs with `pip install -r requirements-vision.txt`. A wrong provider name, a missing
@@ -63,9 +64,23 @@ python -m scripts.try_vision anthropic my_photo.jpg
 It prints the model's assessment as JSON, never the key. Use real photos: the placeholders in
 `samples/photos` have their own file names written on them.
 
-The provider adapters and the PaddleOCR engine are written but **have not been run against a live
-service in this repo**. Request shape and reply parsing are tested with fake clients (and a fake OCR
-engine for routing), but a real call can still differ, so run the script above first.
+The **vision provider adapters have not been run against a live service in this repo**. Request shape
+and reply parsing are tested with fake clients, but a real call can still differ, so run the script above
+first.
+
+**Test the OCR on a scan:**
+
+```bash
+python3.11 -m venv .venv-ocr && source .venv-ocr/bin/activate     # Python 3.11 or 3.12, not 3.14
+pip install -r requirements-ocr.txt
+python -m scripts.try_ocr samples/lease_scanned.pdf               # what it read, the fields, the rules
+LEASE_AGENT_OCR=paddle uvicorn app.main:app                        # then upload the scan in the UI
+```
+
+On the author's machine (Intel Mac, no CUDA) that scan, an image with no text layer, reads in about 30
+seconds on CPU: all 16 fields extracted, all 7 rules pass, and the source boxes land on the right lines.
+The sample is a clean render of a typed page, so it is the easy case. Test a phone photo of a printed lease
+before trusting it on real documents.
 
 ## How it works
 
@@ -110,13 +125,19 @@ treated as missing by the rules, so rejecting a value cannot silently pass a rul
 
 **4. OCR only when needed, and the best open one when it is.** Digital PDFs already carry text and
 coordinates, so they never touch OCR. A page without a text layer goes to an `OcrEngine`. I surveyed
-2026 benchmarks and chose **PaddleOCR-VL-1.6** (about 0.9B parameters, Apache-2.0, 96.34 on
-OmniDocBench v1.6, and first on the scanned Real5 subset; MinerU2.5-Pro scored 95.75 and GLM-OCR 95.22).
-It runs locally, which matters for lease text. Sources:
+2026 benchmarks and picked **PaddleOCR-VL-1.6** as the best open model (about 0.9B parameters,
+Apache-2.0, 96.34 on OmniDocBench v1.6, first on the scanned Real5 subset; MinerU2.5-Pro scored 95.75
+and GLM-OCR 95.22). Sources:
 [Roboflow ranking](https://blog.roboflow.com/best-open-source-ocr-models/),
 [Docsumo comparison](https://www.docsumo.com/blog/best-ocr-models),
-[OmniDocBench](https://github.com/opendatalab/OmniDocBench). The interface keeps it swappable, and a
-few leaderboard points are not a reason to lock in. Run it on real Doha leases before trusting it.
+[OmniDocBench](https://github.com/opendatalab/OmniDocBench).
+
+**What actually ran.** When I tried it, PaddleOCR-VL would not load on an Intel Mac: it needs
+PaddlePaddle 3.2 or newer, and only 3.0.0 is published for that platform. So the engine verified end to
+end is **classic PP-OCR** from the same project (`paddle`), which returns line-level boxes, runs on CPU,
+and gave a clean read of the scanned sample. `paddle-vl` is still in the code for Linux or Apple silicon,
+and fails with a clear message when the install is too old. Both sit behind the same interface. A few
+leaderboard points are not a reason to lock in, and neither has been run on real Doha leases.
 
 **5. The unit is the join.** Leases and issues both reference `unit_id`. `GET /api/units/{id}`
 returns the accepted lease, leases awaiting review, all issues with their work orders, and the audit
@@ -262,17 +283,20 @@ app/
   issue_steps.py  assess_photos, summarise, draft_work_order
   agents.py    LeaseAgent, IssueAgent (a step list each) and human-decision handling
   vision.py    VisionModel interface, StubVision, AnthropicVision, OpenAIVision
-  ocr_paddle.py optional PaddleOCR-VL engine
+  ocr_paddle.py optional OCR engines: PP-OCR (verified) and PaddleOCR-VL (not run here)
   store.py     SQLite persistence and audit log
   main.py      FastAPI app
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
 scripts/       sample generator
-tests/         121 tests
+tests/         129 tests
 ```
 
 ## Honest status
 
-Tested: the rule engine, extraction and provenance, OCR routing (with a fake engine), unit matching, the
-whole review flow over HTTP, input validation, and both vision adapters against fake clients. Not tested
-live: PaddleOCR-VL and the Anthropic and OpenAI calls. The UI is exercised only by hand. Photo assessment from the stub is keyword-driven by design.
+Tested: the rule engine, extraction and provenance, OCR routing, unit matching, the whole review flow over
+HTTP, input validation, the OCR adapters and both vision adapters against fakes. **Run for real:** PP-OCR on
+the scanned sample, both directly and through an HTTP upload to the app (fields, rules, source boxes and
+accepting the lease all correct). Not run live: PaddleOCR-VL (it cannot load on the author's machine) and the
+Anthropic and OpenAI vision calls. The UI is exercised only by hand. Photo assessment from the stub is
+keyword-driven by design.
