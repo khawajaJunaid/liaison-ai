@@ -70,8 +70,9 @@
 
   <div class="tabs" id="tabs" role="tablist" aria-label="Scenario"></div>
   <div class="controls">
-    <button id="play" aria-label="Play or pause">Play</button>
+    <button id="back" aria-label="Previous step">Back</button>
     <button id="step" aria-label="Next step">Next step</button>
+    <button id="play" aria-label="Play all or pause">Play all</button>
     <button id="restart" aria-label="Restart">Restart</button>
     <label class="muted">Speed <select id="speed"><option value="1.6">Slow</option><option value="1" selected>Normal</option><option value="0.5">Fast</option></select></label>
   </div>
@@ -83,7 +84,7 @@
   <div class="stage">
     <div class="panel"><h2 id="inTitle">Input</h2><div id="input"></div></div>
     <div class="panel" aria-live="polite"><h2>What this step produced</h2>
-      <div class="step-title" id="stepTitle">Press Play</div><div class="step-does" id="stepDoes"></div>
+      <div class="step-title" id="stepTitle">Press Next step to begin</div><div class="step-does" id="stepDoes"></div>
       <ul class="out" id="out"></ul><div id="gate"></div></div>
   </div>
 
@@ -123,11 +124,11 @@ function buildTabs() {
 }
 
 function select(i, autoplay = false) {
-  run++; playing = false; sc = TRACES[i]; cur = -1; $("play").textContent = "Play";
+  run++; playing = false; sc = TRACES[i]; cur = -1; $("play").textContent = "Play all";
   [...$("tabs").children].forEach((b, j) => b.classList.toggle("on", j === i));
   $("blurb").textContent = sc.blurb;
   buildPipe(); buildInput();
-  $("out").innerHTML = ""; $("gate").innerHTML = ""; $("stepTitle").textContent = "Press Play"; $("stepDoes").textContent = "";
+  $("out").innerHTML = ""; $("gate").innerHTML = ""; $("stepTitle").textContent = "Press Next step to begin"; $("stepDoes").textContent = "";
   if (autoplay) { playing = true; $("play").textContent = "Pause"; auto(); }
 }
 
@@ -177,7 +178,8 @@ function highlightFor(text) {
   sc.document.forEach((t, i) => { if (t.trim() && quote.includes(t.trim())) $("ln-" + i).classList.add("hit"); });
 }
 
-async function show(i) {
+async function show(i, instant = false) {
+  const wait = (ms) => (instant ? Promise.resolve() : sleep(ms));  // instant: render the step at once (used by Back)
   const my = ++run, last = sc.steps.length;
   cur = i;
   for (let k = 0; k <= last; k++) { const n = $("node-" + k); n.classList.remove("active", "done", "ok", "bad", "warn"); if (k < i) n.classList.add("done"); }
@@ -190,13 +192,13 @@ async function show(i) {
     node.classList.add(sc.gate.tone);
     $("stepTitle").textContent = "A person decides";
     $("stepDoes").textContent = "The pipeline only prepares. Decisions are made by a person and are audited.";
-    await sleep(500); if (my !== run) return;
+    await wait(500); if (my !== run) return;
     let html = `<div class="gatecard ${sc.gate.tone}"><b>${esc(sc.gate.title)}</b>` + sc.gate.lines.map((l) => `<div>${esc(l.text)}</div>`).join("");
     const u = sc.gate.unit;  // the unit's real status from the owner records, not an assumed one
     if (sc.kind === "lease" && u) html += `<div class="unit"><span>${esc(u.id)}</span><span class="chip ${esc(u.status)}" id="chip">${esc(u.status)}</span></div>`;
     $("gate").innerHTML = html + "</div>";
     if (sc.kind === "lease" && sc.gate.tone === "ok") {
-      await sleep(900); if (my !== run) return;
+      await wait(900); if (my !== run) return;
       $("chip").className = "chip occupied"; $("chip").textContent = "occupied";
     }
     return;
@@ -209,9 +211,10 @@ async function show(i) {
     if (my !== run) return;
     const li = document.createElement("li"); li.className = l.tone; li.textContent = l.text; $("out").appendChild(li);
     if (step.name === "extract_fields") highlightFor(l.text);
-    await sleep(step.output.length > 8 ? 160 : 320);
+    await wait(step.output.length > 8 ? 160 : 320);
   }
   if (my !== run) return;
+  if (!playing) return;  // manual mode: stop here and wait for the next click
   await sleep(700);
 }
 
@@ -230,10 +233,18 @@ $("step").onclick = () => {
   if (cur >= sc.steps.length) cur = -1;
   show(cur + 1);
 };
-$("restart").onclick = () => select(TRACES.indexOf(sc), true);
+$("back").onclick = () => {
+  playing = false; $("play").textContent = "Play all";
+  if (cur > 0) show(cur - 1, true);
+};
+$("restart").onclick = () => select(TRACES.indexOf(sc), false);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight") $("step").click();
+  if (e.key === "ArrowLeft") $("back").click();
+});
 window.addEventListener("resize", placeBracket);
 
-buildTabs(); select(0, true);
+buildTabs(); select(0, false);  // starts paused: the reader moves through the steps
 </script>
 </body>
 </html>
