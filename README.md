@@ -25,7 +25,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
 uvicorn app.main:app --reload           # http://127.0.0.1:8000
-pytest                                  # 129 tests, offline, about 2 seconds
+pytest                                  # 145 tests, offline, about 3 seconds
 ```
 
 Try it with the samples:
@@ -77,10 +77,19 @@ python -m scripts.try_ocr samples/lease_scanned.pdf               # what it read
 LEASE_AGENT_OCR=paddle uvicorn app.main:app                        # then upload the scan in the UI
 ```
 
-On the author's machine (Intel Mac, no CUDA) that scan, an image with no text layer, reads in about 30
-seconds on CPU: all 16 fields extracted, all 7 rules pass, and the source boxes land on the right lines.
-The sample is a clean render of a typed page, so it is the easy case. Test a phone photo of a printed lease
-before trusting it on real documents.
+Two scanned samples, both with no text layer:
+
+| Sample | What it is | Result on the author's machine (Intel Mac, no CUDA, CPU) |
+|---|---|---|
+| `samples/lease_scanned.pdf` | A clean render of the lease | About 30 s. All 16 fields right, all 7 rules pass, 0 flags. [Picture](docs/ocr-clean.jpg) |
+| `samples/lease_scanned_photo.pdf` | Imitates a phone photo: crooked, blurred, uneven light, noise | All 16 fields right, all 7 rules pass, 2 flags. [Picture](docs/ocr-phone-photo.jpg) |
+
+The photo sample exposed three real misreads, now fixed and covered by tests (`tests/test_ocr_misreads.py`):
+OCR turned `9,500` into `9.500` (first read as 9.5), dropped a letter from "Security Deposit", and ran
+`5. RENT` together as `5.RENT`. A period where a thousands comma belongs is now read as thousands **and
+flagged** ("the page shows 9.500, confirm against the page"), because a guess like that must not be trusted
+silently. The samples are synthetic, so they are still easier than a real crumpled scan. Test a real phone
+photo of a printed lease, and an Arabic one, before trusting it.
 
 ## How it works
 
@@ -289,7 +298,7 @@ app/
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
 scripts/       sample generator
-tests/         129 tests
+tests/         145 tests
 ```
 
 ## Honest status

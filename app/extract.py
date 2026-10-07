@@ -27,7 +27,9 @@ _MONTHS = {m: i for i, m in enumerate(
 DATE = (r"(\d{4}-\d{2}-\d{2}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+\d{4}"
         r"|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[/.-]\d{1,2}[/.-]\d{4})")
 CUR = r"(?:QAR|QR|Qatari\s+Riyals?)"
-NUM = r"(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)"
+# A period is accepted as a thousands separator too: OCR often reads the comma in "9,500" as "9.500".
+# QAR amounts have two decimals at most, so exactly three digits after a separator is a thousands group.
+NUM = r"(\d{1,3}(?:[,.]\d{3})+(?!\d)(?:[.,]\d{1,2}(?!\d))?|\d+(?:\.\d{1,2})?(?!\d))"
 
 
 def money_patterns(label: str) -> list[str]:
@@ -35,7 +37,8 @@ def money_patterns(label: str) -> list[str]:
     so '5%' in an escalation clause is never read as a rent."""
     return [rf"{label}\s*[:\-–]\s*{CUR}?\s*{NUM}", rf"{label}\b[^\d]{{0,60}}?{CUR}\s*{NUM}"]
 
-HEADING = re.compile(r"^\s*(\d+[\.\)]\s|[A-Z][A-Z &/-]{3,}$)")
+# "5. RENT" and the "5.RENT" that OCR often produces (no space) are both headings; "12.5% rent" is not.
+HEADING = re.compile(r"^\s*(\d+[\.\)](?:\s|(?=[A-Z]))|[A-Z][A-Z &/-]{3,}$)")
 
 
 def parse_date(text: str) -> date | None:
@@ -60,6 +63,10 @@ def _iso_date(m: re.Match) -> str | None:
 
 
 def _money(s: str) -> float:
+    """'9,500', '9.500' (OCR), '9,500.50' and '12.50' -> 9500.0, 9500.0, 9500.5, 12.5."""
+    m = re.fullmatch(r"(\d{1,3}(?:[,.]\d{3})+)(?:[.,](\d{1,2}))?", s)
+    if m:
+        return float(re.sub(r"[,.]", "", m[1]) + (f".{m[2]}" if m[2] else ""))
     return float(s.replace(",", ""))
 
 
@@ -94,6 +101,18 @@ class _Reader:
                       f"CONFLICT: the lease gives different values: {', '.join(map(str, distinct))}")
         else:
             self._set(name, hits[0][0], hits[0][1], confidence)
+
+    def check_separator(self, name: str):
+        """A period where a thousands comma belongs ('9.500') was read as 9,500: say so, lower the confidence,
+        and let a person confirm it against the page. OCR makes this misread; a person must see it."""
+        f = self.fields[name]
+        if f.value is None or f.source is None or f.note:
+            return
+        m = re.search(r"\d\.\d{3}(?!\d)", f.source.quote)
+        if m:
+            f.confidence = min(f.confidence, 0.6)
+            f.note = (f"CHECK: the page shows '{m.group(0)}', a period where a thousands comma is expected. "
+                      f"Read as {f.value:,.0f}. Confirm against the page.")
 
     def clause(self, name: str, keywords: str, prefer: str | None = None, max_lines: int = 3):
         """Capture the clause around a keyword: its heading's body, or the line plus followers."""
@@ -162,7 +181,11 @@ def extract_fields(doc: Document) -> dict[str, ExtractedField]:
     if r.fields["monthly_rent"].value is not None:
         r._set("rent_frequency", "monthly", r.fields["monthly_rent"].source, 0.9)
     r.find(money_patterns(r"(?:annual|yearly)\s+rent"), money, "annual_rent")
-    r.find(money_patterns(r"security\s+deposit"), money, "deposit_amount")
+    # "Securty Deposit" (an OCR dropout) and a bare "Deposit:" are read too, but only straight after a colon.
+    r.find(money_patterns(r"security\s+deposit") + [rf"(?:secu\w*\s+)?deposit\s*[:\-–]\s*{CUR}?\s*{NUM}"],
+           money, "deposit_amount")
+    for amount in ("monthly_rent", "annual_rent", "deposit_amount"):
+        r.check_separator(amount)
     if r.fields["deposit_amount"].value is None and r.fields["monthly_rent"].value is not None:
         words = {"one": 1, "two": 2, "three": 3, "1": 1, "2": 2, "3": 3}
         m = re.search(r"security\s+deposit[^.\n]{0,60}?\b(one|two|three|1|2|3)\s*(?:\(\d\)\s*)?months?", doc.text, re.I)

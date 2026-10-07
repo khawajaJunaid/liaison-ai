@@ -140,6 +140,8 @@ class SelfCheck(BaseStep):
         for name, fld in f.items():
             if fld.decision != "overridden" and fld.note and fld.note.startswith("CONFLICT"):
                 add("conflict", "high", fld.note.removeprefix("CONFLICT: "), [name])
+            elif fld.usable and fld.decision == "pending" and fld.note and fld.note.startswith("CHECK"):
+                add("check", "medium", fld.note.removeprefix("CHECK: "), [name])  # a person confirms an OCR-prone read
             elif (fld.usable and fld.decision == "pending" and fld.confidence < 0.7
                   and not name.endswith("_signed") and not fld.note):
                 add("low_confidence", "low", f"{name.replace('_', ' ')} was read with low confidence ({fld.confidence:.0%}).", [name])

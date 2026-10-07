@@ -11,11 +11,12 @@ photos/*.jpg          placeholder images; the stub vision model reads the filena
 """
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
 import pymupdf
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
@@ -96,6 +97,27 @@ def _scanned_pdf(source: Path, path: Path) -> None:
     out.save(path)
 
 
+def _photo_pdf(source: Path, path: Path) -> None:
+    """Imitate a phone photo of a printed lease: crooked, soft focus, uneven light, noise, JPEG artefacts.
+    The clean scan is the easy case; this is closer to what a tenant actually uploads."""
+    page = pymupdf.open(source)[0]
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(2.2, 2.2))
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    img = img.rotate(2.2, expand=True, fillcolor=(205, 200, 190), resample=Image.BICUBIC)
+    img = img.filter(ImageFilter.GaussianBlur(1.1))
+    width, height = img.size
+    light = ImageOps.invert(Image.linear_gradient("L").resize((width, height))).point(lambda v: 165 + v * 90 // 255)
+    img = ImageChops.multiply(img, light.convert("RGB"))  # darker towards the bottom
+    noise = Image.effect_noise((width, height), 14).convert("RGB")
+    img = ImageChops.add(img, noise, scale=1, offset=-128)
+    jpeg = io.BytesIO()
+    img.save(jpeg, "JPEG", quality=55)
+    out = pymupdf.open()
+    new = out.new_page(width=page.rect.width, height=page.rect.height)
+    new.insert_image(new.rect, stream=jpeg.getvalue())
+    out.save(path)
+
+
 PHOTOS = {
     "ac_unit_water_leak.jpg": (70, 110, 150),
     "water_heater_rust_old.jpg": (140, 90, 60),
@@ -116,10 +138,12 @@ def _photos(folder: Path) -> None:
 def build_all(out: Path) -> dict[str, Path]:
     out.mkdir(parents=True, exist_ok=True)
     paths = {"good": out / "lease_good.pdf", "defective": out / "lease_defective.pdf",
-             "scanned": out / "lease_scanned.pdf", "photos": out / "photos"}
+             "scanned": out / "lease_scanned.pdf", "photo": out / "lease_scanned_photo.pdf",
+             "photos": out / "photos"}
     _lease_pdf(paths["good"], GOOD)
     _lease_pdf(paths["defective"], DEFECTIVE)
     _scanned_pdf(paths["good"], paths["scanned"])
+    _photo_pdf(paths["good"], paths["photo"])
     _photos(paths["photos"])
     return paths
 
