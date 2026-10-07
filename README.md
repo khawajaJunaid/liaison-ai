@@ -230,7 +230,8 @@ language would be more surface than value.
 - Verifying handwritten signatures or stamps visually.
 - Dispatching work orders to vendors, tenant notifications, comments.
 - Real sample photos: the brief's photos were not supplied, so the images here are placeholders and the
-  stub reads their names. The vision path is the least validated part of this repo.
+  stub reads their names. The vision path is the least validated part of this repo: the Anthropic call has
+  been run live on one test photo (above), and nothing else has.
 - Rent schedule, cheques and payments.
 
 ## Where it breaks first at scale
@@ -302,7 +303,7 @@ app/
   main.py      FastAPI app
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
-scripts/       sample generator
+scripts/       sample generator, and the export that feeds the walkthrough page
 tests/         148 tests
 ```
 
@@ -312,6 +313,6 @@ Tested: the rule engine, extraction and provenance, OCR routing, unit matching, 
 HTTP, input validation, the OCR adapters and both vision adapters against fakes. **Run for real:** PP-OCR on
 the scanned sample, both directly and through an HTTP upload to the app (fields, rules, source boxes and
 accepting the lease all correct), and the Anthropic vision call on two images (a placeholder, answered
-"unknown", and a real photo of a leaking air conditioner, answered correctly). Not run live: PaddleOCR-VL (it
+"unknown", and a photo of a leaking air conditioner, answered correctly). Not run live: PaddleOCR-VL (it
 cannot load on the author's machine) and the OpenAI vision call. The UI is exercised only by hand. Photo
 assessment from the stub is keyword-driven by design.
