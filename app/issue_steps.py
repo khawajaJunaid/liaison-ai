@@ -84,7 +84,8 @@ class DraftWorkOrder(BaseStep):
                  f"Reported by: {issue.reporter or 'unknown'}."]
         if issue.note:
             lines.append(f"Reporter note: {issue.note}")
-        lines += [f"- {d.type} ({d.severity}){' on ' + d.affects if d.affects else ''} [{fn}]" for d, fn in findings] \
+        lines += [f"- {d.type} ({d.severity}){' on ' + d.affects if d.affects else ''}: {d.description.strip()} [{fn}]"
+                  for d, fn in findings] \
             or ["- No damage identified automatically; an inspector should look at the photos."]
         if equipment:
             lines.append("Equipment in photos: " + ", ".join(equipment) + ".")

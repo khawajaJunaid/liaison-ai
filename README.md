@@ -25,7 +25,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m scripts.make_samples          # writes samples/ (leases + placeholder photos)
 uvicorn app.main:app --reload           # http://127.0.0.1:8000
-pytest                                  # 145 tests, offline, about 3 seconds
+pytest                                  # 148 tests, offline, about 3 seconds
 ```
 
 Try it with the samples:
@@ -61,12 +61,18 @@ export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY, set in your own shell
 LEASE_AGENT_VISION=openai uvicorn app.main:app      # or anthropic
 ```
 
-Open a unit and upload a photo. Use real photos: the placeholders in `samples/photos` have their own file
-names written on them, so a model would just read them back.
+Open a unit and upload a photo. Use real photos: the placeholders in `samples/photos` are plain coloured
+rectangles, so a real model correctly answers "unknown" for them (confidence 0.02 in a live run).
 
-The **vision provider adapters have not been run against a live service in this repo**. Request shape
-and reply parsing are tested with fake clients, but a real call can still differ, so try it with a real
-photo first.
+**Live result (Anthropic, `claude-sonnet-5-5`).** The Anthropic adapter has been run live. A phone-style
+photo of a wall-mounted air conditioner leaking down a wall onto a laminate floor came back in about 5
+seconds as `damaged`, confidence 0.9, with three findings (wall staining, standing water, baseboard
+exposure) and the likely cause (condensate overflow or a blocked drain line). I checked the answer against
+the photo and it matched. The reply is recorded in `tests/test_recorded_reply.py`.
+
+Not run live: the **OpenAI adapter and local OpenAI-compatible servers** (tested against fake clients
+only). Also not re-run live: the prompt was tightened after that run (what `affects` means, and that
+furniture is not equipment), so try one photo again before relying on it.
 
 **Test the OCR on a scan:**
 
@@ -297,7 +303,7 @@ app/
   static/      single-page UI
 seed/          units.json and owner_ruleset.json as supplied
 scripts/       sample generator
-tests/         145 tests
+tests/         148 tests
 ```
 
 ## Honest status
@@ -305,6 +311,7 @@ tests/         145 tests
 Tested: the rule engine, extraction and provenance, OCR routing, unit matching, the whole review flow over
 HTTP, input validation, the OCR adapters and both vision adapters against fakes. **Run for real:** PP-OCR on
 the scanned sample, both directly and through an HTTP upload to the app (fields, rules, source boxes and
-accepting the lease all correct). Not run live: PaddleOCR-VL (it cannot load on the author's machine) and the
-Anthropic and OpenAI vision calls. The UI is exercised only by hand. Photo assessment from the stub is
-keyword-driven by design.
+accepting the lease all correct), and the Anthropic vision call on two images (a placeholder, answered
+"unknown", and a real photo of a leaking air conditioner, answered correctly). Not run live: PaddleOCR-VL (it
+cannot load on the author's machine) and the OpenAI vision call. The UI is exercised only by hand. Photo
+assessment from the stub is keyword-driven by design.

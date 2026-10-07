@@ -77,7 +77,14 @@ PROMPT = """You assess photos of rental property units for an owner. Return ONLY
  "damages": [{"type": str, "severity": "high|medium|low", "description": str, "affects": str|null}],
  "equipment": [{"name": str, "category": str, "condition": str}],
  "confidence": number between 0 and 1}
-Report only what is visible. If the photo is unclear, use condition "unknown" and low confidence."""
+Rules:
+- Report only what is visible. If the photo is unclear, use condition "unknown" and low confidence.
+- "affects" is the equipment or fixture the problem comes from or concerns, for example the air conditioner
+  behind a wall stain. Use null if there is none. Put the damaged surface in "description".
+- In "description", say what you see and the most likely cause if it is apparent.
+- "equipment" lists only what an owner maintains: air conditioners, water heaters, appliances, fixtures, taps,
+  doors, windows. Leave out furniture, curtains and the tenant's belongings.
+- An equipment "condition" is exactly one of: new, good, worn, damaged, unknown."""
 
 
 def parse_assessment(raw: str, filename: str, model: str) -> PhotoAssessment:
