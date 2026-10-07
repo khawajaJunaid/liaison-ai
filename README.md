@@ -53,27 +53,26 @@ Install the provider SDKs with `pip install -r requirements-vision.txt`. A wrong
 key or a missing SDK stops the app at startup with a clear message. A provider failure at run time (bad
 key, rate limit, timeout) returns a 502 that names the step, and nothing is half-saved.
 
-**Try a provider on real photos before relying on it:**
+**Try a provider on real photos before relying on it:** start the app with the provider and report an
+issue with a real photo.
 
 ```bash
-export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY, set in your own shell
-python -m scripts.try_vision openai  my_photo.jpg
-python -m scripts.try_vision anthropic my_photo.jpg
+export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY, set in your own shell, never in a file
+LEASE_AGENT_VISION=openai uvicorn app.main:app      # or anthropic
 ```
 
-It prints the model's assessment as JSON, never the key. Use real photos: the placeholders in
-`samples/photos` have their own file names written on them.
+Open a unit and upload a photo. Use real photos: the placeholders in `samples/photos` have their own file
+names written on them, so a model would just read them back.
 
 The **vision provider adapters have not been run against a live service in this repo**. Request shape
-and reply parsing are tested with fake clients, but a real call can still differ, so run the script above
-first.
+and reply parsing are tested with fake clients, but a real call can still differ, so try it with a real
+photo first.
 
 **Test the OCR on a scan:**
 
 ```bash
 python3.11 -m venv .venv-ocr && source .venv-ocr/bin/activate     # Python 3.11 or 3.12, not 3.14
 pip install -r requirements-ocr.txt
-python -m scripts.try_ocr samples/lease_scanned.pdf               # what it read, the fields, the rules
 LEASE_AGENT_OCR=paddle uvicorn app.main:app                        # then upload the scan in the UI
 ```
 

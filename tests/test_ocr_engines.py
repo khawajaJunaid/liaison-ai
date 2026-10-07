@@ -1,6 +1,6 @@
 """The Paddle engine adapters, driven by a fake `paddleocr` module (no models, no network).
 
-The real engine is verified separately with `python -m scripts.try_ocr samples/lease_scanned.pdf`.
+The real engine is verified separately: start the app with LEASE_AGENT_OCR=paddle and upload samples/lease_scanned.pdf.
 These tests pin the adapter: which models it asks for, how it reads results, and how it fails.
 """
 import sys

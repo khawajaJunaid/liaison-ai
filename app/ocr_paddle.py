@@ -6,7 +6,7 @@
 Two engines, because only one of them runs everywhere:
 
 paddle      Classic PP-OCR text detection and recognition. Line-level boxes, runs on CPU, and is
-            the engine verified end to end in this repo (scripts/try_ocr.py on the scanned sample,
+            the engine verified end to end in this repo (on the scanned sample lease,
             on an Intel Mac with no CUDA). Set LEASE_AGENT_OCR_LANG for another language, for
             example `ar` for Arabic.
 
